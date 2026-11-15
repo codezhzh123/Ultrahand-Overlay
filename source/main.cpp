@@ -32,7 +32,7 @@
 #include <tesla.hpp>
 #include <utils.hpp>
 #include <set>
-
+#include <filesystem>
 
 using namespace ult;
 
@@ -218,6 +218,80 @@ static tsl::elm::ListItem* selectedListItem;
 static tsl::elm::ListItem* lastSelectedListItem;
 
 static std::atomic<bool> lastRunningInterpreter{false};
+
+// Automatically switch Chinese mainland (Tencent) version to global version
+static Result setGlobalRegion() {
+    Result rc;
+    if (R_SUCCEEDED(rc = setsysSetT(false))) {
+        if (R_SUCCEEDED(rc = setsysSetRegionCode(SetRegion_HTK))) {
+            if (R_SUCCEEDED(rc = spsmInitialize())) {
+                spsmShutdown(true);
+                spsmExit();
+            }
+        }
+    }
+    return rc;
+} // Switch to Hong Kong region
+
+static void switchTencentVerToGlobalVer() {
+    Result rc;
+    std::string cfgFilePath;
+
+    bool force_switch = false;
+    cfgFilePath = std::string("sdmc:/config/") + "ultrahand" + "/" + "force_switch.flag"; // Force region switch flag
+    if (std::filesystem::exists(cfgFilePath))
+        force_switch = true;
+
+    if (R_FAILED(rc = setsysInitialize())) {
+        fatalThrow(MAKERESULT(Module_HomebrewLoader, R_DESCRIPTION(rc)));
+        return;
+    }
+
+    if (force_switch) {
+        rc = setGlobalRegion();
+        setsysExit();
+        if (R_FAILED(rc))
+            fatalThrow(MAKERESULT(Module_HomebrewLoader, R_DESCRIPTION(rc)));
+        return;
+    }
+
+    constexpr u32 ExosphereEmummcType = 65007;
+    u64 is_emummc;
+    if (R_SUCCEEDED(rc = splInitialize())) {
+        rc = splGetConfig(static_cast<SplConfigItem>(ExosphereEmummcType), &is_emummc);
+        splExit();
+        if (R_FAILED(rc)) {
+            setsysExit();
+            fatalThrow(MAKERESULT(Module_HomebrewLoader, R_DESCRIPTION(rc)));
+            return;
+        } // Only perform automatic region switch on emuMMC
+
+        bool is_do_for_ofw = false;
+        cfgFilePath = std::string("sdmc:/config/") + "ultrahand" + "/" + "enable_for_ofw.flag"; // Allow region switch on sysMMC (OFW) flag
+        if (std::filesystem::exists(cfgFilePath))
+            is_do_for_ofw = true;
+
+        if (!is_emummc && !is_do_for_ofw) {
+            setsysExit();
+            return;
+        }
+    }
+
+    bool isTencentVersion = false;
+    if (R_FAILED(rc = setsysGetT(&isTencentVersion))) {
+        setsysExit();
+        fatalThrow(MAKERESULT(Module_HomebrewLoader, R_DESCRIPTION(rc)));
+        return;
+    } // Do not perform automatic region switch if already global version
+
+    if (isTencentVersion)
+        rc = setGlobalRegion();
+        // Automatically switch region if it is the Chinese mainland (Tencent) version
+
+    setsysExit();
+    if (R_FAILED(rc))
+        fatalThrow(MAKERESULT(Module_HomebrewLoader, R_DESCRIPTION(rc)));
+}
 
 // ── Timed result symbol for regular items ───────────────────────────────────
 // After a regular (default-mode) item's commands finish, its result symbol
@@ -8501,7 +8575,7 @@ public:
  */
 int main(int argc, char* argv[]) {
     ult::openCommandInvokedCallback = captureOpenReturnContext;
-
+    switchTencentVerToGlobalVer();
     for (u8 arg = 0; arg < argc; arg++) {
         if (argv[arg][0] != '-') continue;
         
